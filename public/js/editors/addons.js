@@ -3,9 +3,11 @@
   /*globals $, jsbin, CodeMirror*/
 
   // ignore addons for embedded views
-  if (jsbin.embed) {
+  if (jsbin.embed || jsbin.mobile) {
     return;
   }
+
+  var processors = jsbin.state.processors;
 
   var defaults = {
     closebrackets: true,
@@ -51,14 +53,14 @@
 
   var addons = {
     closebrackets: {
-      url: '/js/vendor/codemirror4/addon/edit/closebrackets.js',
+      url: '/js/vendor/codemirror5/addon/edit/closebrackets.js',
       test: defaultTest('autoCloseBrackets'),
       done: function (cm) {
         setOption(cm, 'autoCloseBrackets', true);
       }
     },
     highlight: {
-      url: '/js/vendor/codemirror4/addon/search/match-highlighter.js',
+      url: '/js/vendor/codemirror5/addon/search/match-highlighter.js',
       test: defaultTest('highlightSelectionMatches'),
       done: function (cm) {
         setOption(cm, 'highlightSelectionMatches', true);
@@ -66,9 +68,7 @@
     },
     vim: {
       url: [
-        '/js/vendor/codemirror4/addon/dialog/dialog.css',
-        '/js/vendor/codemirror4/keymap/vim.js',
-        '/js/vendor/codemirror4/addon/dialog/dialog.js'
+        '/js/vendor/codemirror5/keymap/vim.js'
       ],
       test: defaultTest('vimMode'),
       done: function (cm) {
@@ -78,15 +78,10 @@
     },
     emacs: {
       url: [
-        '/js/vendor/codemirror4/addon/dialog/dialog.css',
-        '/js/vendor/codemirror4/keymap/emacs.js',
-        '/js/vendor/codemirror4/addon/dialog/dialog.js',
-        '/js/vendor/codemirror4/addon/search/search.js'
+        '/js/vendor/codemirror5/keymap/emacs.js'
       ],
       test: function () {
-        return jsbin.panels.panels.javascript.editor.openDialog &&
-               CodeMirror.commands.find &&
-               CodeMirror.keyMap.emacs;
+        return CodeMirror.keyMap.emacs;
       },
       done: function (cm) {
         setOption(cm, 'keyMap', 'emacs');
@@ -94,8 +89,8 @@
     },
     matchtags: {
       url: [
-        '/js/vendor/codemirror4/addon/fold/xml-fold.js',
-        '/js/vendor/codemirror4/addon/edit/matchtags.js'
+        '/js/vendor/codemirror5/addon/fold/xml-fold.js',
+        '/js/vendor/codemirror5/addon/edit/matchtags.js'
       ],
       test: function () {
         return CodeMirror.scanForClosingTag &&
@@ -107,7 +102,7 @@
       }
     },
     trailingspace: {
-      url: '/js/vendor/codemirror4/addon/edit/trailingspace.js',
+      url: '/js/vendor/codemirror5/addon/edit/trailingspace.js',
       test: defaultTest('showTrailingSpace'),
       done: function (cm) {
         setOption(cm, 'showTrailingSpace', true);
@@ -115,12 +110,12 @@
     },
     fold: {
       url: [
-        '/js/vendor/codemirror4/addon/fold/foldgutter.css',
-        '/js/vendor/codemirror4/addon/fold/foldcode.js',
-        '/js/vendor/codemirror4/addon/fold/foldgutter.js',
-        '/js/vendor/codemirror4/addon/fold/brace-fold.js',
-        '/js/vendor/codemirror4/addon/fold/xml-fold.js',
-        '/js/vendor/codemirror4/addon/fold/comment-fold.js'
+        '/js/vendor/codemirror5/addon/fold/foldgutter.css',
+        '/js/vendor/codemirror5/addon/fold/foldcode.js',
+        '/js/vendor/codemirror5/addon/fold/foldgutter.js',
+        '/js/vendor/codemirror5/addon/fold/brace-fold.js',
+        '/js/vendor/codemirror5/addon/fold/xml-fold.js',
+        '/js/vendor/codemirror5/addon/fold/comment-fold.js'
       ],
       test: function () {
         return CodeMirror.helpers.fold &&
@@ -134,22 +129,17 @@
         }});
         setOption(cm, 'foldGutter', true);
         var gutters = cm.getOption('gutters');
-        gutters.push('CodeMirror-linenumbers');
-        gutters.push('CodeMirror-foldgutter');
-        setOption(cm, 'gutters', gutters);
+        var copyGutters = gutters.slice();
+        copyGutters.push('CodeMirror-foldgutter');
+        setOption(cm, 'gutters', copyGutters);
       }
     },
     sublime: {
       url: [
-        '/js/vendor/codemirror4/addon/dialog/dialog.css',
-        '/js/vendor/codemirror4/keymap/sublime.js',
-        '/js/vendor/codemirror4/addon/dialog/dialog.js',
-        '/js/vendor/codemirror4/addon/search/search.js'
+        '/js/vendor/codemirror5/keymap/sublime.js'
       ],
       test: function () {
-        return jsbin.panels.panels.javascript.editor.openDialog &&
-               CodeMirror.commands.find &&
-               CodeMirror.keyMap.sublime;
+        return CodeMirror.keyMap.sublime;
       },
       done: function (cm) {
         setOption(cm, 'keyMap', 'sublime');
@@ -163,21 +153,19 @@
         delete CodeMirror.keyMap['sublime'][cmd + '-Enter'];
         delete CodeMirror.keyMap['sublime'][cmd + '-Up'];
         delete CodeMirror.keyMap['sublime'][cmd + '-Down'];
+        CodeMirror.keyMap['sublime']['Shift-Tab'] = 'indentAuto';
         cm.removeKeyMap('noEmmet');
       }
     },
     tern: {
       url: [
-        '/js/vendor/codemirror4/addon/dialog/dialog.css',
-        '/js/vendor/codemirror4/addon/hint/show-hint.css',
-        '/js/vendor/codemirror4/addon/tern/tern.css',
-        '/js/vendor/codemirror4/addon/hint/show-hint.js',
-        '/js/vendor/codemirror4/addon/dialog/dialog.js',
+        '/js/vendor/codemirror5/addon/hint/show-hint.css',
+        '/js/vendor/codemirror5/addon/tern/tern.css',
+        '/js/vendor/codemirror5/addon/hint/show-hint.js',
         '/js/prod/addon-tern-' + jsbin.version + '.min.js'
       ],
       test: function () {
-        return jsbin.panels.panels.javascript.editor.openDialog &&
-               (typeof window.ternBasicDefs !== 'undefined') &&
+        return (typeof window.ternBasicDefs !== 'undefined') &&
                CodeMirror.showHint &&
                CodeMirror.TernServer &&
                CodeMirror.startTern;
@@ -188,7 +176,7 @@
     },
     activeline: {
       url: [
-        '/js/vendor/codemirror4/addon/selection/active-line.js'
+        '/js/vendor/codemirror5/addon/selection/active-line.js'
       ],
       test: function() {
         return (typeof CodeMirror.defaults.styleActiveLine !== 'undefined');
@@ -219,11 +207,21 @@
         if (cm.getOption('mode') !== 'css') {
           return;
         }
+
+        if (processors.css !== undefined && processors.css !== 'css') {
+          return;
+        }
         hintingDone(cm);
       }
     },
     jshint: {
-      url: [],
+      url: [
+        // because jshint uses new style set/get - so we sniff for IE8 or lower
+        // since it's the only one that doesn't have it
+        $.browser.msie && $.browser.version < 9 ?
+        '/js/vendor/jshint/jshint.old.min.js' :
+        '/js/vendor/jshint/jshint.min.js',
+      ],
       test: function() {
         return hintingTest('javascript') &&
                (typeof JSHINT !== 'undefined');
@@ -232,6 +230,11 @@
         if (cm.getOption('mode') !== 'javascript') {
           return;
         }
+
+        if (processors.javascript !== undefined && processors.javascript !== 'javascript') {
+          return;
+        }
+
         hintingDone(cm, {
           'eqnull': true
         });
@@ -250,6 +253,11 @@
         if (cm.getOption('mode') !== 'htmlmixed') {
           return;
         }
+
+        if (processors.html !== undefined && processors.html !== 'html') {
+          return;
+        }
+
         hintingDone(cm);
       }
     },
@@ -263,7 +271,7 @@
                (typeof coffeelint !== 'undefined');
       },
       done: function(cm) {
-        if (cm.getOption('mode') !== 'coffeescript') {
+        if (cm.getOption('mode') !== 'coffeescript' || jsbin.state.processors.javascript !== 'coffeescript') {
           return;
         }
         hintingDone(cm);
@@ -304,10 +312,16 @@
     if (test()) {
       d.resolve();
     } else {
+      var start = new Date().getTime();
+      var last = new Date();
       timer = setInterval(function () {
+        last = new Date();
         if (test()) {
           clearInterval(timer);
           d.resolve();
+        } else if (last.getTime() - start > 10 * 1000) {
+          clearInterval(timer);
+          d.reject();
         }
       }, 100);
     }
@@ -343,21 +357,21 @@
     var opt = $.extend({}, settingsHintShow);
     opt.consoleParent = cm.getWrapperElement().parentNode.parentNode;
     setOption(cm, 'lintOpt', opt);
-    setOption(cm, 'lintRules', $.extend({}, defhintOptions, jsbin.settings[mode + 'hintOptions']));
     if (opt.gutter) {
       var gutters = cm.getOption('gutters');
       if (gutters.indexOf('CodeMirror-lint-markers') === -1) {
-        gutters.push('CodeMirror-lint-markers');
-        setOption(cm, 'gutters', gutters);
+        var copyGutters = gutters.slice();
+        copyGutters.push('CodeMirror-lint-markers');
+        setOption(cm, 'gutters', copyGutters);
       }
-      setOption(cm, 'lint', true);
       var ln = cm.getOption('lineNumbers');
       setOption(cm, 'lineNumbers', !ln);
       setOption(cm, 'lineNumbers', ln);
-    } else {
-      setOption(cm, 'lint', true);
     }
-    if (opt.console) {
+
+    setOption(cm, 'lint', { delay: 800, options: $.extend({}, defhintOptions, jsbin.settings[mode + 'hintOptions']) });
+
+    if (opt.console && cm.consolelint) {
       $document.trigger('sizeeditors');
       $(cm.consolelint.head).on('click', function() {
         if (!detailsSupport) {

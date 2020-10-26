@@ -1,13 +1,14 @@
-/*globals objectValue, $, jsbin, $body, $document*/
+/*globals objectValue, $, jsbin, $body, $document, saveChecksum, jsconsole*/
 var keyboardHelpVisible = false;
 
-var customKeys = objectValue('jsbin.settings.keys') || {};
+var customKeys = objectValue('settings.keys', jsbin) || {};
 
 function enableAltUse() {
   if (!jsbin.settings.keys) {
     jsbin.settings.keys = {};
   }
   jsbin.settings.keys.useAlt = this.checked;
+  settings.save();
 }
 
 $('input.enablealt').attr('checked', customKeys.useAlt ? true : false).change(enableAltUse);
@@ -45,12 +46,12 @@ if (!customKeys.disabled) {
     var includeAltKey = customKeys.useAlt ? event.altKey : !event.altKey,
         closekey = customKeys.closePanel ? customKeys.closePanel : 48;
 
-    if (event.ctrlKey) { event.metaKey = true; }
+    if (event.ctrlKey && $.browser.platform !== 'mac') { event.metaKey = true; }
 
-    if (event.metaKey && event.which === 89) {
-      archive(!event.shiftKey);
-      return event.preventDefault();
-    }
+    // if (event.metaKey && event.which === 89 && !event.shiftKey) {
+    //   archive(!jsbin.state.metadata.archive);
+    //   return event.preventDefault();
+    // }
 
     if (event.metaKey && event.which === 79) { // open
       $('a.homebtn').trigger('click', 'keyboard');
@@ -62,13 +63,18 @@ if (!customKeys.disabled) {
       if (event.shiftKey === false) {
         if (saveChecksum) {
           saveChecksum = false;
+          $document.trigger('snapshot');
         } else {
           // trigger an initial save
           $('a.save:first').click();
         }
         event.preventDefault();
-      } else if (event.shiftKey === true) { // shift+s = clone
-        $('a.clone').click();
+      } else if (event.shiftKey === true) { // shift+s = open share menu
+        var $sharemenu = $('#sharemenu');
+        if ($sharemenu.hasClass('open')) {
+
+        }
+        $('#sharemenu a').trigger('mousedown');
         event.preventDefault();
       }
     } else if (event.which === closekey && event.metaKey && includeAltKey && jsbin.panels.focused) {
@@ -176,11 +182,7 @@ function keycontrol(event) {
 
     if (event.which === 191 && event.metaKey && event.shiftKey) {
       // show help
-      $body.toggleClass('keyboardHelp');
-      keyboardHelpVisible = $body.is('.keyboardHelp');
-      if (keyboardHelpVisible) {
-        analytics.track('keyboard', 'select', 'help');
-      }
+      opendropdown($('#help').prev()[0]);
       event.stop();
     } else if (event.which === 27 && keyboardHelpVisible) {
       $body.removeClass('keyboardHelp');

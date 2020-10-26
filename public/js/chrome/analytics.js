@@ -1,14 +1,12 @@
-var analytics = {
-  track: function (category, action, label, value) {
-    var data = ['_trackEvent', category, action];
-    if (label) {
-      data.push(label);
-    }
-    if (value) {
-      data.push(value);
-    }
-
-    window._gaq && _gaq.push(data);
+var analytics = jsbin.analytics = {
+  track: function (category, action, label) { // , value
+    window.ga && ga('send', 'event', category, action, label);
+  },
+  experiment: function (type) {
+    analytics.track('experiment', type);
+  },
+  universalEditor: function (value) {
+    analytics.track('menu', 'universalEditor', value);
   },
   library: function (action, value) {
     analytics.track('menu', action, 'library', value);
@@ -17,10 +15,11 @@ var analytics = {
     analytics.track('infocard', action, value);
   },
   embed: function () {
-    analytics.track('state', 'embed');
     try {
       analytics.track('state', 'embed', window.top.location);
-    } catch (e) {};
+    } catch (e) {
+      analytics.track('state', 'embed');
+    }
   },
   milestone: function () {
     analytics.track('bin', 'save', window.location.pathname);
@@ -133,3 +132,8 @@ var analytics = {
     analytics.track('welcome-panel-link', url);
   }
 };
+
+// misses the asset upload one
+$('a[data-pro="true"]').on('click', function () {
+  analytics.track('try-pro', $(this).text());
+});

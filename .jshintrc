@@ -1,5 +1,6 @@
 {
   "browser": true,
+  "version": "es6",
   "camelcase": true,
   "curly": true,
   "devel": true,
@@ -10,6 +11,6 @@
   "node": true,
   "quotmark": "single",
   "undef": true,
-  "strict": true,
+  "strict": false,
   "unused": true
 }

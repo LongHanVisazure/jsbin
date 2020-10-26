@@ -56,7 +56,7 @@ jQuery(function ($) {
   var vatEl = $('#vat');
   var vatISOEl = $('#vatiso');
 
-  $.getJSON('//country-finder.herokuapp.com/?callback=?', function (data) {
+  $.getJSON('https://country-finder.herokuapp.com/?callback=?', function (data) {
     if (data.geo) {
       countryEl.val(data.geo.country.toLowerCase()).trigger('change');
     }
@@ -73,25 +73,48 @@ jQuery(function ($) {
     }
   });
 
-
-  var price = { yearly: {}, monthly: {} };
+  var price = { yearly: {}, monthly: {}, discount: {} };
   price.yearly.el = $('#price-yearly');
   price.yearly.value = price.yearly.el.data('price') * 1;
   price.monthly.el = $('#price-monthly');
   price.monthly.value = price.monthly.el.data('price') * 1;
+  price.discount.el = $('#discount');
+  price.discount.value = price.discount.el.data('price') * 1;
 
   var fx = {
-    USD: { rate: 0, symbol: '$' },
-    EUR: { rate: 0, symbol: '€' },
+    USD: { rate: 1 / 0.888684 / (1 / 1.138751), symbol: '$' },
+    EUR: { rate: 1 / 0.888684, symbol: '€' },
     GBP: { rate: 1, symbol: '£' }
   };
 
+  // fx.EUR.rate = 1 / 0.888684;
+  // fx.USD.rate = 1 / 0.888684 / (1 / 1.138751);
+
+
   function updatePricesTo(ccy) {
-    price.yearly.el.html(fx[ccy].symbol + (price.yearly.value * fx[ccy].rate | 0));
-    price.monthly.el.html(fx[ccy].symbol + (price.monthly.value * fx[ccy].rate | 0));
+    var yearly = price.yearly.value * fx[ccy].rate;
+    var monthly = price.monthly.value * fx[ccy].rate;
+
+    if (ccy !== 'GBP') {
+      yearly = yearly | 0;
+      monthly = monthly | 0;
+    }
+
+    var discount = price.discount.value * fx[ccy].rate | 0;
+    price.yearly.el.html(fx[ccy].symbol + yearly);
+    price.monthly.el.html(fx[ccy].symbol + monthly);
+    price.discount.el.html(fx[ccy].symbol + discount);
   }
 
   var $ccynote = $('.ccy-note');
+
+  // var rates = {
+  //   "USD": 1.138751,
+  //   "GBP": 0.888684,
+  //   "EUR": 1
+  //   };
+  fx.EUR.rate = 1 / 0.888684;
+  fx.USD.rate = fx.EUR.rate / (1 / 1.138751);
 
   $('.ccy input').change(function () {
     var ccy = this.value;
@@ -102,19 +125,7 @@ jQuery(function ($) {
       $ccynote.prop('hidden', false);
     }
 
-    if (!fx[ccy].rate) {
-      // get via ajax
-      $.ajax({
-        url: 'https://rate-exchange.appspot.com/currency?from=GBP&to=' + ccy,
-        dataType: 'jsonp',
-        success: function (data) {
-          fx[ccy].rate = data.rate;
-          updatePricesTo(ccy);
-        }
-      })
-    } else {
-      updatePricesTo(ccy);
-    }
+    updatePricesTo(ccy);
   })
 
 
@@ -129,11 +140,12 @@ jQuery(function ($) {
 
     if (vatNum) {
       vatEl.addClass('validating');
-      $.getJSON('//vat-validator.herokuapp.com/' + vat + '?callback=?', function (data) {
-        if (data.error) {
+      $.getJSON('https://taxtools.io/api/validate/' + vat, function (data) {
+        if (!data.verified) {
           return setTimeout(function () {
+            console.log('API request failed, trying again');
             $('#validateVat').click();
-          }, 2000);
+          }, 3000);
         }
 
         if (data) {

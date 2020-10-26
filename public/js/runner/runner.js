@@ -2,10 +2,19 @@
  * JS Bin Runner
  * Accepts incoming postMessage events and updates a live iframe accordingly.
  * ========================================================================== */
-
+/*globals sandbox loopProtect window alert */
 var runner = (function () {
   'use strict';
   var runner = {};
+
+  /**
+   * Update the loop protoction hit function to send an event up to the parent
+   * window so we can insert it in our error UI
+   */
+  loopProtect.hit = function (line) {
+    console.warn('Exiting potential infinite loop at line ' + line + '. To disable loop protection: add "// noprotect" to your code');
+    runner.postMessage('loopProtectHit', line);
+  }
 
   /**
    * Store what parent origin *should* be
@@ -19,7 +28,7 @@ var runner = (function () {
   runner.error = function () {
     var args = ['Runner:'].concat([].slice.call(arguments));
     if (!('console' in window)) {return alert(args.join(' '));}
-    window.console.error.apply(console, args);
+    //window.console.error.apply(console, args);
   };
 
   /**
@@ -29,7 +38,7 @@ var runner = (function () {
     if (!event.origin) {return;}
     var data = event.data;
     try {
-      data = JSON.parse(event.data);
+      data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
     } catch (e) {
       return runner.error('Error parsing event data:', e.message);
     }
@@ -61,6 +70,18 @@ var runner = (function () {
    * Render a new preview iframe using the posted source
    */
   runner.render = function (data) {
+    // if we're just changing CSS, let's try to inject the change
+    // instead of doing a full render
+    if (data.options.injectCSS) {
+      if (sandbox.active) {
+        var style = sandbox.active.contentDocument.getElementById('jsbin-css');
+        if (style) {
+          style.innerHTML = data.source;
+          return;
+        }
+      }
+    }
+
     var iframe = sandbox.create(data.options);
     sandbox.use(iframe, function () {
       var childDoc = iframe.contentDocument,
@@ -91,8 +112,10 @@ var runner = (function () {
       // childDoc.write) can access the objects.
       childWindow.runnerWindow = {
         proxyConsole: proxyConsole,
-        protect: loopProtect.protect
+        protect: loopProtect,
       };
+
+      childWindow.console = proxyConsole;
 
       // Reset the loop protection before rendering
       loopProtect.reset();
@@ -109,9 +132,12 @@ var runner = (function () {
       // why the source is rendered above (processor.render) – it should be one
       // string. IE's a sensitive soul.
       childDoc.write(source);
+      // childDoc.documentElement.innerHTML = source;
 
       // Close the document. This will fire another DOMContentLoaded.
       childDoc.close();
+
+      runner.postMessage('complete');
 
       // Setup the new window
       sandbox.wrap(childWindow, data.options);

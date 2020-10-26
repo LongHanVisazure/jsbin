@@ -1,11 +1,18 @@
 ;(function () {
+  /*global jsbin, $, $document, analytics*/
+  'use strict';
+  if (!jsbin.user || !jsbin.user.name || jsbin.embed) {
+    return;
+  }
+
   var $body = $('body'),
       loaded = false,
+      requestAttempts = 5,
       $history; // set in hookUserHistory()
 
   $document.on('history:open', function () {
     if ($history && jsbin.panels.getVisible().length === 0) {
-      $history.appendTo('body');
+      $history.appendTo('main');
     }
   }).on('history:close', function () {
     if ($history === null) {
@@ -14,7 +21,9 @@
   });
 
   var loadList = function () {
-    if (loaded) return;
+    if (loaded) {
+      return;
+    }
 
     if ($('html').hasClass('public-listing')) {
       hookUserHistory();
@@ -23,12 +32,23 @@
         dataType: 'html',
         url: jsbin.root + '/list',
         error: function () {
-          $('#history').remove();
-          setTimeout(loadList, 500);
+          requestAttempts--;
+          if (requestAttempts > 0) {
+            $('#history').remove();
+            setTimeout(loadList, 500);
+          } else {
+            console.error('Giving up to load history');
+          }
         },
         success: function (html) {
           $('#history').remove();
-          $body.append(html);
+          var frag = $(html);
+          if (jsbin.mobile) {
+            // mobile is particularly slow at rendering 1,000s of tbodys
+            // so we'll remove some to relieve the pressure.
+            frag.find('tbody:gt(50)').remove();
+          }
+          $body.append(frag);
           hookUserHistory();
           loaded = true;
         }
@@ -42,7 +62,7 @@
   };
 
   var updateViewing = function (url, $viewing) {
-    $viewing.text(url);
+    $viewing.html('<a href="' + url + '">' + url + '</a>');
   };
 
   var updateLayout = function ($tbodys, archiveMode) {
@@ -67,7 +87,9 @@
   var hookUserHistory = function () {
     // Loading the HTML from the server may have failed
     $history = $('#history').detach();
-    if (!$history.length) return $history;
+    if (!$history.length) {
+      return $history;
+    }
 
     // Cache some useful elements
     var $iframe = $('iframe', $history),
@@ -75,20 +97,12 @@
         $bins = $history,
         $tbodys = $('tbody', $history),
         $trs = $('tr', $history),
-        $created = $('td.created a', $history),
         $toggle = $('.toggle_archive', $history),
         current = null,
-        hoverTimer = null,
-        layoutTimer = null;
-
-    // Load bin from data-edit-url attribute when user clicks on a row
-    $bins.delegate('tr:not(.spacer)', 'click', function () {
-      if (event.shiftKey || event.metaKey) return;
-      window.location = this.getAttribute('data-edit-url');
-    });
+        hoverTimer = null;
 
     // Archive & un-archive click handlers
-    $bins.delegate('.archive, .unarchive', 'click', function (e) {
+    $bins.delegate('.archive, .unarchive', 'click', function () {
       var $this = $(this),
           $row = $this.parents('tr');
       // Instantly update this row and the page layout
@@ -103,7 +117,7 @@
         url: $this.attr('href'),
         error: function () {
           // Undo if something went wrong
-          alert("Something went wrong, please try again");
+          alert('Something went wrong, please try again');
           $row.toggleClass('archived');
           updateLayout($tbodys, $history.hasClass('archive_mode'));
         },
@@ -120,22 +134,47 @@
       updateLayout($tbodys, archive);
     });
 
+    var selected = null;
+    $bins.delegate('a', 'click', function (event) {
+      if (event.shiftKey || event.metaKey) { return; }
 
-    // Load a preview on tr mouseover (delayed by 400ms)
-    $bins.delegate('tr', 'mouseover', function (event) {
-      var $this = $(this),
-          url = $this.attr('data-url');
-      clearTimeout(hoverTimer);
-      if (!$this.hasClass('spacer') && current !== url) {
-        hoverTimer = setTimeout(function () {
-          $trs.removeClass('selected');
-          $this.addClass('selected');
-          current = url;
-          updatePreview(url, $iframe);
-          updateViewing(url, $viewing);
-        }, 400);
+      var $this = $(this);
+
+      if ($this.closest('.action').length) {
+        // let the existing handlers deal with action links
+        return;
       }
-      return false;
+
+      event.preventDefault();
+      event.stopPropagation(); // prevent further delegates
+      if ($this.data('toggle') === 'history') {
+        jsbin.panels.allEditors(function (panel) {
+          if (panel.editor.getCode().trim().length) {
+            panel.show();
+          }
+        });
+        return;
+      }
+      var $tr = $this.closest('tr');
+      var data = $tr.data();
+      var url = jsbin.root + data.url;
+
+      if (selected === this) {
+        window.location = data.editUrl;
+      } else {
+        $trs.removeClass('selected');
+        $tr.addClass('selected');
+        updatePreview(url, $iframe);
+        updateViewing(url, $viewing);
+
+        selected = this;
+      }
+    });
+
+    // Load bin from data-edit-url attribute when user clicks on a row
+    $bins.delegate('tr:not(.spacer)', 'click', function (event) {
+      if (event.shiftKey || event.metaKey) { return; }
+      $(this).find('.url a:first').click();
     });
 
     // Update the time every 30 secs
@@ -144,11 +183,8 @@
     $('a[pubdate]', $history).attr('pubdate', function (i, val) {
       return val.replace('Z', '+0000');
     }).prettyDate();
-    // setInterval(function(){
-    //   $created.prettyDate();
-    // }, 30 * 1000);
 
-    // Update the layout straign away
+    // Update the layout straight away
     setTimeout(function () {
       updateLayout($tbodys, false);
     }, 0);
@@ -160,7 +196,9 @@
 
   // inside a ready call because history DOM is rendered *after* our JS to improve load times.
   $(document).on('jsbinReady', function ()  {
-    if (jsbin.embed) return;
+    if (jsbin.embed) {
+      return;
+    }
 
     var $panelButtons = $('#panels a'),
         $homebtn = $('.homebtn'),
@@ -185,6 +223,8 @@
 
     $homebtn.on('click', loadList);
     $panelButtons.on('mousedown', panelCloseIntent);
+
+    $document.on('history:load', loadList);
 
     if (!panelsVisible) {
       loadList();

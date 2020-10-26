@@ -32,7 +32,7 @@ panels.save = function () {
     state[panel.name] = left;
   }
 
-  sessionStorage.setItem('jsbin.panels', JSON.stringify(state));
+  store.sessionStorage.setItem('jsbin.panels', JSON.stringify(state));
 };
 
 function getQuery(qs) {
@@ -85,6 +85,26 @@ function getQuery(qs) {
   return obj;
 }
 
+function stringAsPanelsToOpen(query) {
+  var validPanels = ['live', 'javascript', 'html', 'css', 'console'];
+
+  return query.split(',').reduce(function (toopen, key) {
+    if (key === 'js') {
+      key = 'javascript';
+    }
+
+    if (key === 'output') {
+      key = 'live';
+    }
+
+    if (validPanels.indexOf(key) !== -1) {
+      toopen.push(key);
+    }
+
+    return toopen;
+  }, []);
+}
+
 panels.restore = function () {
   'use strict';
   /*globals jsbin, editors, $window, $document*/
@@ -96,7 +116,7 @@ panels.restore = function () {
       search = location.search.substring(1),
       hash = location.hash.substring(1),
       toopen = [],
-      state = jsbin.embed ? null : JSON.parse(sessionStorage.getItem('jsbin.panels') || 'null'),
+      state = jsbin.embed ? null : JSON.parse(store.sessionStorage.getItem('jsbin.panels') || 'null'),
       hasContent = { javascript: editors.javascript.getCode().length,
         css: editors.css.getCode().length,
         html: editors.html.getCode().length
@@ -109,12 +129,12 @@ panels.restore = function () {
       openWithSameDimensions = false,
       width = $window.width(),
       deferredCodeInsert = '',
-      focused = !!sessionStorage.getItem('panel'),
+      focused = !!store.sessionStorage.getItem('panel'),
       validPanels = 'live javascript html css console'.split(' '),
       cachedHash = '';
 
   if (history.replaceState && (location.pathname.indexOf('/edit') !== -1) || ((location.origin + location.pathname) === jsbin.getURL() + '/')) {
-    history.replaceState(null, '', jsbin.getURL() + (jsbin.getURL() === jsbin.root ? '' : '/edit') + (hash ? '#' + hash : ''));
+    // history.replaceState(null, '', jsbin.getURL() + (jsbin.getURL() === jsbin.root ? '' : '/edit') + (hash ? '#' + hash : ''));
   }
 
   if (search || hash) {
@@ -124,6 +144,11 @@ panels.restore = function () {
     if (query.indexOf('&') !== -1) {
       query = getQuery(search || hash);
       toopen = Object.keys(query).reduce(function (toopen, key) {
+        if (key.indexOf(',') !== -1 && query[key] === '') {
+          toopen = stringAsPanelsToOpen(key);
+          return toopen;
+        }
+
         if (key === 'js') {
           query.javascript = query.js;
           key = 'javascript';
@@ -145,21 +170,7 @@ panels.restore = function () {
         return toopen;
       }, []);
     } else {
-      toopen = query.split(',').reduce(function (toopen, key) {
-        if (key === 'js') {
-          key = 'javascript';
-        }
-
-        if (key === 'output') {
-          key = 'live';
-        }
-
-        if (validPanels.indexOf(key) !== -1) {
-          toopen.push(key);
-        }
-
-        return toopen;
-      }, []);
+      toopen = stringAsPanelsToOpen(query);
     }
   }
 
@@ -169,7 +180,7 @@ panels.restore = function () {
     }
     else {
       // load from personal settings
-      toopen = jsbin.settings.panels;
+      toopen = jsbin.mobile ? [jsbin.settings.panels[0]] : jsbin.settings.panels;
     }
   }
 
@@ -180,15 +191,7 @@ panels.restore = function () {
     toopen.push('live');
   }
 
-  // otherwise restore the user's regular settings
-  // also set a flag indicating whether or not we should save the panel settings
-  // this is based on whether they're on jsbin.com or if they're on an existing
-  // bin. Also, if they hit save - *always* save their layout.
-  if (location.pathname && location.pathname !== '/') {
-    panels.saveOnExit = false;
-  } else {
-    panels.saveOnExit = true;
-  }
+  panels.saveOnExit = true;
 
   /* Boot code */
   // then allow them to view specific panels based on comma separated hash fragment/query
@@ -279,7 +282,7 @@ panels.restore = function () {
   // for (name in this.panels) {
   //   panel = this.panels[name];
   //   if (panel.editor) {
-  //     // panel.setCode(sessionStorage.getItem('jsbin.content.' + name) || template[name]);
+  //     // panel.setCode(store.sessionStorage.getItem('jsbin.content.' + name) || template[name]);
   //   }
   // }
 
@@ -302,7 +305,7 @@ panels.savecontent = function () {
   var name, panel;
   for (name in this.panels) {
     panel = this.panels[name];
-    if (panel.editor) sessionStorage.setItem('jsbin.content.' + name, panel.getCode());
+    if (panel.editor) store.sessionStorage.setItem('jsbin.content.' + name, panel.getCode());
   }
 };
 
@@ -330,8 +333,48 @@ panels.focus = function (panel) {
   }
 }
 
+panels.getQuery = function () {
+  var alt = {
+    javascript: 'js',
+    live: 'output'
+  };
+
+  var visible = panels.getVisible();
+
+  return visible.map(function (p) {
+    return alt[p.id] || p.id;
+  }).join(',');
+}
+
+panels.updateQuery = throttle(function updateQuery() {
+  var query = panels.getQuery();
+
+  if (jsbin.state.code && jsbin.state.owner) {
+    $.ajax({
+      url: jsbin.getURL({ withRevision: true }) + '/settings',
+      type: 'PUT',
+      data: { panels: visible.map(function (p) { return p.id; }) },
+      success: function () {}
+    });
+  }
+
+  if (history.replaceState) {
+    history.replaceState(null, null, '?' + query);
+  }
+}, 100);
+
+var userResizeable = !$('html').hasClass('layout');
+
+if (!userResizeable) {
+  $('#source').removeClass('stretch');
+}
+
 // evenly distribute the width of all the visible panels
 panels.distribute = function () {
+  if (!userResizeable) {
+    return;
+  }
+
   var visible = $('#source .panelwrapper:visible'),
       width = 100,
       height = 0,
@@ -378,7 +421,7 @@ panels.distribute = function () {
         });
       }
     }
-  } else {
+  } else if (!jsbin.embed) {
     $('#history').show();
     setTimeout(function () {
       $body.removeClass('panelsVisible');
@@ -422,11 +465,11 @@ panels.hide = function (panelId) {
   */
 };
 
-panels.hideAll = function () {
+panels.hideAll = function (fromShow) {
   var visible = panels.getVisible(),
       i = visible.length;
   while (i--) {
-    visible[i].hide();
+    visible[i].hide(fromShow);
   }
 };
 
@@ -505,45 +548,11 @@ editors.console = panelInit.console();
 upgradeConsolePanel(editors.console);
 editors.live = panelInit.live();
 
-// jsconsole.init(); // sets up render functions etc.
 editors.live.settings.render = function (showAlerts) {
   if (panels.ready) {
     renderLivePreview(showAlerts);
   }
 };
-
-// IMPORTANT this is nasty, but the sequence is important, because the
-// show/hide method is being called as the panels are being called as
-// the panel is setup - so we hook these handlers on *afterwards*.
-// panels.update = function () {
-//   var visiblePanels = panels.getVisible(),
-//       visible = [],
-//       i = 0;
-//   for (i = 0; i < visiblePanels.length; i++) {
-//     visible.push(visiblePanels[i].name);
-//   }
-
-//   if (history.replaceState) {
-//     history.replaceState(null, null, '?' + visible.join(','));
-//   } else {
-//     // :( this will break jquery mobile - but we're talking IE only at this point, right?
-//     location.hash = '#' + visible.join(',');
-//   }
-// }
-
-
-// Panel.prototype._show = Panel.prototype.show;
-// Panel.prototype.show = function () {
-//   this._show.apply(this, arguments);
-//   panels.update();
-// }
-
-// Panel.prototype._hide = Panel.prototype.hide;
-// Panel.prototype.hide = function () {
-//   this._hide.apply(this, arguments);
-//   panels.update();
-// }
-
 
 panels.allEditors = function (fn) {
   var panelId, panel;
@@ -557,40 +566,6 @@ setTimeout(function () {
   panels.restore();
 }, 10);
 panels.focus(panels.getVisible()[0] || null);
-
-// allow panels to be reordered - TODO re-enable
-(function () {
-  return; // disabled for now
-
-  var panelsEl = document.getElementById('panels'),
-      moving = null;
-
-  panelsEl.ondragstart = function (e) {
-    if (e.target.nodeName == 'A') {
-      moving = e.target;
-    } else {
-      return false;
-    }
-  };
-
-  panelsEl.ondragover = function (e) {
-    return false;
-  };
-
-  panelsEl.ondragend = function () {
-    moving = false;
-    return false;
-  };
-
-  panelsEl.ondrop = function (e) {
-    if (moving) {
-
-    }
-    return false;
-  };
-
-});
-
 
 var editorsReady = setInterval(function () {
   var ready = true,
@@ -621,10 +596,25 @@ var editorsReady = setInterval(function () {
       }
     });
 
+    var altLibraries = $('li.add-library');
+    var altRun = $('li.run-with-js');
+    editors.live.on('hide', function () {
+      altLibraries.show();
+      altRun.hide();
+    });
+
+    editors.live.on('show', function () {
+      altLibraries.hide();
+      altRun.show();
+    });
+
+    if (panels.panels.live.visible) {
+      editors.live.trigger('show');
+    } else {
+      editors.live.trigger('hide');
+    }
+
     clearInterval(editorsReady);
-    // panels.ready = true;
-    // if (typeof editors.onReady == 'function') editors.onReady();
-    // panels.distribute();
 
     // if the console is visible, it'll handle rendering of the output and console
     if (panels.panels.console.visible) {
@@ -635,12 +625,14 @@ var editorsReady = setInterval(function () {
     }
 
 
-    $(window).resize(function () {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(function () {
-        $document.trigger('sizeeditors');
-      }, 100);
-    });
+    if (!jsbin.mobile) {
+      $(window).resize(function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () {
+          $document.trigger('sizeeditors');
+        }, 100);
+      });
+    }
 
     $document.trigger('sizeeditors');
     $document.trigger('jsbinReady');

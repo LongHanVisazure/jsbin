@@ -11,7 +11,7 @@
   }
   if (jsbin.settings.gui.toppanel === undefined) {
     jsbin.settings.gui.toppanel = true;
-    localStorage.setItem('settings', JSON.stringify(jsbin.settings));
+    store.localStorage.setItem('settings', JSON.stringify(jsbin.settings));
   }
 
   if ($body.hasClass('toppanel') && jsbin.settings.gui.toppanel === false) {
@@ -27,6 +27,8 @@
     settings.save();
     $body.addClass('toppanel-close');
     $body.removeClass('toppanel');
+
+    // $document.trigger('sizeeditors');
   };
 
   var showToppanel = function() {
@@ -36,13 +38,16 @@
     $body.addClass('toppanel');
   };
 
-  // to remove
   var goSlow = function(e) {
     $body.removeClass('toppanel-slow');
     if (e.shiftKey) {
       $body.addClass('toppanel-slow');
     }
   };
+
+  $('.toppanel-logo').on('webkitTransitionEnd otransitionend oTransitionEnd msTransitionEnd transitionend', function(e) {
+    $document.trigger('sizeeditors');
+  });
 
   $('.toppanel-hide').click(function(event) {
     event.preventDefault();
@@ -87,12 +92,15 @@
     cache: true,
     success: function (data) {
       var blogpost = data.blog[0];
-      $('.toppanel-blog ul').html('<li><a href="/' + blogpost.slug + '" target="_blank" class="toppanel-link">' + blogpost.title.replace(/TWDTW.*:\s/, '') + '</a></li>');
+      // this is daft, but it means that the landing page is the same
+      // for all, and ensures that blog comments end up on a single place
+      var root = jsbin.root.replace(/^https/, 'http');
+      $('.toppanel-blog ul').html('<li><a href="' + root + '/' + blogpost.slug + '" target="_blank" class="toppanel-link">' + blogpost.title.replace(/TWDTW.*:\s/, '') + '</a></li>');
 
       var last = null;
       var count = 1;
       try {
-        last = localStorage.lastpost || null;
+        last = store.localStorage.getItem('lastpost') || null;
       } catch (e) {}
 
       if (last !== null) {
@@ -110,12 +118,20 @@
       }
 
       if (count) {
-        $('.blog a').attr('href', '/' + data.blog[count-1].slug).attr('data-count', count);
+        $('.blog a').attr('href', root + '/' + data.blog[count-1].slug).attr('data-count', count).on('click', function () {
+          // this is a weird hack work around to try to clear the storage
+          // item that says which was the last post viewed. so we update
+          // the timestamp when the user clicks the link, because we know
+          // they'll land on the latest post
+          try {
+            localStorage.lastpost = data.blog[count-1].timestamp;
+          } catch (e) {}
+        });
       }
 
       var help = shuffle(data.help);
 
-      $('.toppanel-help ul').html('<li><a href="/' + help[0].slug + '" target="_blank" class="toppanel-link">' + help[0].title + '</a></li><li><a href="/' + help[1].slug + '" target="_blank" class="toppanel-link">' + help[1].title + '</a></li>');
+      $('.toppanel-help ul').html('<li><a href="' + root + '/' + help[0].slug + '" target="_blank" class="toppanel-link">' + help[0].title + '</a></li><li><a href="' + root + '/' + help[1].slug + '" target="_blank" class="toppanel-link">' + help[1].title + '</a></li>');
 
     }
   })

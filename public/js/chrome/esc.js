@@ -1,7 +1,9 @@
 var loginVisible = false,
     dropdownOpen = false,
     keyboardHelpVisible = false,
-    urlHelpVisible = false;
+    urlHelpVisible = false,
+    sideNavVisible = false,
+    infocardVisible = false;
 
 $document.keydown(function (event) {
   if (event.which == 27) {//} || (keyboardHelpVisible && event.which == 191 && event.shiftKey && event.metaKey)) {
@@ -10,6 +12,14 @@ $document.keydown(function (event) {
 });
 
 function hideOpen() {
+  if (infocardVisible) {
+    $('#infocard').removeClass('open');
+    infocardVisible = false;
+  }
+  if (sideNavVisible) {
+    $body.removeClass('show-nav');
+    sideNavVisible = false;
+  }
   if (urlHelpVisible) {
     $body.removeClass('urlHelp');
     urlHelpVisible = false;
@@ -19,9 +29,7 @@ function hideOpen() {
     keyboardHelpVisible = false;
     analytics.closeMenu('keyboardHelp');
   } else if (dropdownOpen) {
-    var open = $('.menu.open').removeClass('open');
-    analytics.closeMenu(open.find('.button')[0].hash.substring(1));
-    dropdownOpen = false;
+    closedropdown();
   } else if (loginVisible) {
     $('#login').hide();
     analytics.closeMenu('login');

@@ -83,15 +83,14 @@ function codeChangeLive(event, data) {
         line = editor.getLine(editor.getCursor().line);
         if (ignoreDuringLive.test(line) === true) {
           // ignore
-          throttledPreview.cancel();
           deferredLiveRender = setTimeout(function () {
             codeChangeLive(event, data);
           }, 1000);
         } else {
-          throttledPreview();
+          renderLivePreview();
         }
       } else {
-        throttledPreview();
+        renderLivePreview();
       }
     }
   }
@@ -138,21 +137,48 @@ var renderer = (function () {
     if (!event.origin) return;
     var data = event.data;
 
+    if (typeof data !== 'string') {
+      // this event isn't for us (i.e. comes from a browser ext)
+      return;
+    }
+
     // specific change to handle reveal embedding
     try {
       if (event.data.indexOf('slide:') === 0 || event.data === 'jsbin:refresh') {
+        // reset the state of the panel visibility
+        jsbin.panels.allEditors(function (p) {
+          p.visible = false;
+        });
         jsbin.panels.restore();
         return;
       }
     } catch (e) {}
 
     try {
-      data = JSON.parse(event.data);
+      data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
     } catch (e) {
       return renderer.error('Error parsing event data:', e.message);
     }
+
+    if (data.type.indexOf('code:') === 0 && jsbin.embed) {
+      var panel = data.type.substr(5);
+      if (panel === 'js') { panel = 'javascript'; }
+      if (' css javascript html '.indexOf(' ' + panel + ' ') === -1) {
+        return renderer.error('No matching event handler:', data.type);
+      }
+
+      if (!jsbin.state.metadata.pro) {
+        return renderer.error('Code injection is only supported on pro created bins');
+      }
+
+      jsbin.panels.panels[panel].setCode(data.data);
+      renderLivePreview();
+
+      return;
+    }
+
     if (typeof renderer[data.type] !== 'function') {
-      return renderer.error('No matching event handler:', data.type);
+      return false; //renderer.error('No matching handler for event', data);
     }
     try {
       renderer[data.type](data.data);
@@ -172,6 +198,45 @@ var renderer = (function () {
       type: type,
       data: data
     }), renderer.runner.origin);
+  };
+
+  /**
+   * When the renderer is complete, it means we didn't hit an initial
+   * infinite loop
+   */
+  renderer.complete = function () {
+    try {
+      store.sessionStorage.removeItem('runnerPending');
+    } catch (e) {}
+  };
+
+  /**
+   * Pass loop protection hit calls up to the error UI
+   */
+  renderer.loopProtectHit = function (line) {
+    var cm = jsbin.panels.panels.javascript.editor;
+
+    // grr - more setTimeouts to the rescue. We need this to go in *after*
+    // jshint does it's magic, but jshint set on a setTimeout, so we have to
+    // schedule after.
+    setTimeout(function () {
+      var annotations = cm.state.lint.annotations || [];
+      if (typeof cm.updateLinting !== 'undefined') {
+        // note: this just updated the *source* reference
+        annotations = annotations.filter(function (a) {
+          return a.source !== 'loopProtectLine:' + line;
+        });
+        annotations.push({
+          from: CodeMirror.Pos(line-1, 0),
+          to: CodeMirror.Pos(line-1, 0),
+          message: 'Exiting potential infinite loop.\nTo disable loop protection: add "// noprotect" to your code',
+          severity: 'warning',
+          source: 'loopProtectLine:' + line
+        });
+
+        cm.updateLinting(annotations);
+      }
+    }, cm.state.lint.options.delay || 0);
   };
 
   /**
@@ -219,6 +284,10 @@ var renderer = (function () {
 
     if (!window._console) {return;}
     if (!window._console[method]) {method = 'log';}
+
+    // skip the entire console rendering if the console is hidden
+    if (!jsbin.panels.panels.console.visible) { return; }
+
     window._console[method].apply(window._console, args);
   };
 
@@ -277,7 +346,7 @@ var renderLivePreview = (function () {
   if (!$live.find('iframe').length) {
     iframe = document.createElement('iframe');
     iframe.setAttribute('class', 'stretch');
-    iframe.setAttribute('sandbox', 'allow-forms allow-pointer-lock allow-popups allow-same-origin allow-scripts');
+    iframe.setAttribute('sandbox', 'allow-modals allow-forms allow-pointer-lock allow-popups allow-same-origin allow-scripts');
     iframe.setAttribute('frameBorder', '0');
     iframe.setAttribute('name', '<proxy>');
     $live.prepend(iframe);
@@ -298,7 +367,10 @@ var renderLivePreview = (function () {
     if (!window.postMessage) { return; }
 
     // Inform other pages event streaming render to reload
-    if (requested) { sendReload(); }
+    if (requested) {
+      sendReload();
+      jsbin.state.hasBody = false;
+    }
     getPreparedCode().then(function (source) {
       var includeJsInRealtime = jsbin.settings.includejs;
 
@@ -309,14 +381,22 @@ var renderLivePreview = (function () {
       if (!outputPanelOpen && !consolePanelOpen) {
         return;
       }
+      // this is a flag that helps detect crashed runners
+      if (jsbin.settings.includejs) {
+        store.sessionStorage.setItem('runnerPending', 1);
+      }
+
       renderer.postMessage('render', {
         source: source,
         options: {
+          injectCSS: jsbin.state.hasBody && jsbin.panels.focused.id === 'css',
           requested: requested,
           debug: jsbin.settings.debug,
-          includeJsInRealtime: jsbin.settings.includejs
-        }
+          includeJsInRealtime: jsbin.settings.includejs,
+        },
       });
+
+      jsbin.state.hasBody = true;
 
     });
   };
@@ -324,6 +404,13 @@ var renderLivePreview = (function () {
   /**
    * Events
    */
+
+  $document.on('codeChange.live', function (event, arg) {
+    if (arg.origin === 'setValue' || arg.origin === undefined) {
+      return;
+    }
+    store.sessionStorage.removeItem('runnerPending');
+  });
 
   // Listen for console input and post it to the iframe
   $document.on('console:run', function (event, cmd) {
@@ -340,10 +427,10 @@ var renderLivePreview = (function () {
 
   // When the iframe loads, swap round the callbacks and immediately invoke
   // if renderLivePreview was called already.
-  return deferCallable(renderLivePreview, function (done) {
+  return deferCallable(throttle(renderLivePreview, 200), function (done) {
     iframe.onload = function () {
       if (window.postMessage) {
-        // Setup postMessage listening to the runner
+        // setup postMessage listening to the runner
         $window.on('message', function (event) {
           renderer.handleMessage(event.originalEvent);
         });
@@ -358,8 +445,7 @@ var renderLivePreview = (function () {
 
 // this needs to be after renderLivePreview is set (as it's defined using
 // var instead of a first class function).
-var throttledPreview = throttle(renderLivePreview, 200),
-    liveScrollTop = null;
+var liveScrollTop = null;
 
 // timer value: used in the delayed render (because iframes don't have
 // innerHeight/Width) in Chrome & WebKit

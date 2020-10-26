@@ -1,4 +1,4 @@
-/*globals jsbin, _, $, RSVP, renderLivePreview, editors, throttle, debounceAsync, hintingDone, CodeMirror, Panel, editorModes */
+/*globals jsbin, _$, RSVP, renderLivePreview, editors, throttle, debounceAsync, hintingDone, CodeMirror, Panel, editorModes */
 var processors = jsbin.processors = (function () {
   'use strict';
   /*
@@ -13,22 +13,44 @@ var processors = jsbin.processors = (function () {
    * Add properties to a function using underscore
    */
   var extendFn = function (fn, obj) {
-    return _.extend(fn, obj);
+    return $.extend(fn, obj);
   };
 
   var passthrough = function (ready) { return ready(); };
-  var defaultProcessor = function (source) {
+  var defaultProcessor = function (source, resolve, reject) {
     return new RSVP.Promise(function (resolve) {
       resolve(source);
-    });
+    }).then(resolve, reject);
   };
 
   /**
    * Cache extension ids by their file extensions
    */
   var processorBy = {
-    extension: {}
+    extension: {},
   };
+
+  /**
+   * A version of $.getScript, but using our jsbin version
+   * as the cachebuster
+   */
+  var getScript = function (url, callback) {
+    $.ajax({
+      cache: true,
+      url: url + '?' + jsbin.version,
+      dataType: 'script',
+      success: callback
+    });
+  };
+
+  function pick() {
+    var args = [].slice.call(arguments, 0);
+    var target = args.shift();
+    return args.reduce(function (acc, curr) {
+      acc[curr] = target[curr] || null;
+      return acc;
+    }, {});
+  }
 
   /**
    * Create a processor – accepts an object containing:
@@ -47,7 +69,7 @@ var processors = jsbin.processors = (function () {
     var url = opts.url,
         init = opts.init || passthrough,
         handler = opts.handler || defaultProcessor,
-        processorData = _.pick(opts, 'id', 'target', 'extensions');
+        processorData = pick(opts, 'id', 'target', 'extensions');
 
     opts.extensions = opts.extensions || [];
     if (!opts.extensions.length) {
@@ -86,7 +108,7 @@ var processors = jsbin.processors = (function () {
 
       if (url) {
         // Load the processor's script
-        $.getScript(url, scriptCB);
+        getScript(url, scriptCB);
       } else {
         // No url, go straight on
         init(function () {
@@ -101,6 +123,13 @@ var processors = jsbin.processors = (function () {
         source: '',
         result: ''
       };
+
+      if (processorData.target) {
+        if (!jsbin.state.cache) {
+          jsbin.state.cache = {};
+        }
+        jsbin.state.cache[processorData.target] = cache;
+      }
       var proxyCallback = function (source) {
         return new RSVP.Promise(function (resolve, reject) {
           source = source.trim();
@@ -130,11 +159,13 @@ var processors = jsbin.processors = (function () {
   var processors = {
 
     html: createProcessor({
-      id: 'html'
+      id: 'html',
+      extensions: ['html']
     }),
 
     css: createProcessor({
-      id: 'css'
+      id: 'css',
+      extensions: ['css']
     }),
 
     javascript: createProcessor({
@@ -148,7 +179,7 @@ var processors = jsbin.processors = (function () {
       extensions: ['coffee'],
       url: jsbin.static + '/js/vendor/coffee-script.js',
       init: function coffeescript(ready) {
-        $.getScript(jsbin.static + '/js/vendor/codemirror4/mode/coffeescript/coffeescript.js', ready);
+        getScript(jsbin.static + '/js/vendor/codemirror5/mode/coffeescript/coffeescript.js', ready);
       },
       handler: function (source, resolve, reject) {
         var renderedCode = '';
@@ -200,7 +231,7 @@ var processors = jsbin.processors = (function () {
       extensions: ['ls'],
       url: jsbin.static + '/js/vendor/livescript.js',
       init: function livescript(ready) {
-        $.getScript(jsbin.static + '/js/vendor/codemirror4/mode/livescript/livescript.js', ready);
+        getScript(jsbin.static + '/js/vendor/codemirror5/mode/livescript/livescript.js', ready);
       },
       handler: function (source, resolve, reject) {
         var renderedCode = '';
@@ -225,7 +256,7 @@ var processors = jsbin.processors = (function () {
 
           reject([errors]);
         }
-      }
+      },
     }),
 
     typescript: createProcessor({
@@ -235,48 +266,38 @@ var processors = jsbin.processors = (function () {
       url: jsbin.static + '/js/vendor/typescript.min.js',
       init: passthrough,
       handler: function typescript(source, resolve, reject) {
-        var noop = function () {};
-        var outfile = {
-          source: '',
-          Write: function (s) {
-            this.source += s;
+
+        var result = ts.transpileModule(source, {
+          compilerOptions: {
+            inlineSourceMap: true,
+            inlineSources: true,
+            target: ts.ScriptTarget.ES5
           },
-          WriteLine: function (s) {
-            this.source += s + '\n';
-          },
-          Close: noop
-        };
-
-        var outerr = {
-          Write: noop,
-          WriteLine: noop,
-          Close: noop
-        };
-
-        var parseErrors = [];
-
-        var compiler = new window.TypeScript.TypeScriptCompiler(outfile, outerr);
-
-        compiler.setErrorCallback(function (start, len, message) {
-          parseErrors.push({ start: start, len: len, message: message });
+          fileName: 'jsbin.ts',
+          reportDiagnostics: true
         });
-        compiler.parser.errorRecovery = true;
 
-        compiler.addUnit(source, 'jsbin.ts');
-        compiler.typeCheck();
-        compiler.reTypeCheck();
-        compiler.emit();
+        /**
+         *  TypeScript is complaining about the `isolateModules` setting, which
+         *  is meant to ignore import statements. We don't want to show that to
+         *  the user, so we just filter it out.
+         */
+        var diagnostics = result.diagnostics.filter(function(error){
+          return error.code !== 5047;
+        });
 
-        for (var i = 0, len = parseErrors.length; i < len; i++) {
-          console.log('Error Message: ' + parseErrors[i].message);
-          console.log('Error Start: ' + parseErrors[i].start);
-          console.log('Error Length: ' + parseErrors[i].len);
-        }
-
-        if (parseErrors.length) {
-          reject();
+        if (diagnostics.length) {
+          reject(diagnostics.map(function(diagnostic){
+            var position  = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+            var line = position.line + 1;
+            var character = position.character + 1;
+            var message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+            var code = source.substr(diagnostic.start, diagnostic.length);
+            return message + (code ? ' at ' + code : '') +
+              ' (' + diagnostic.file.fileName + ':'+line+':'+character+')';
+          }).join('\n'));
         } else {
-          resolve(outfile.source);
+          resolve(result.outputText);
         }
       }
     }),
@@ -287,7 +308,7 @@ var processors = jsbin.processors = (function () {
       extensions: ['md', 'markdown', 'mdown'],
       url: jsbin.static + '/js/vendor/marked.min.js',
       init: function markdown(ready) {
-        $.getScript(jsbin.static + '/js/vendor/codemirror4/mode/markdown/markdown.js', ready);
+        getScript(jsbin.static + '/js/vendor/codemirror5/mode/markdown/markdown.js', ready);
       },
       handler: function (source, resolve, reject) {
         try {
@@ -305,7 +326,7 @@ var processors = jsbin.processors = (function () {
       url: jsbin.static + '/js/vendor/processing.min.js',
       init: function (ready) {
         $('#library').val( $('#library').find(':contains("Processing")').val() ).trigger('change');
-        $.getScript(jsbin.static + '/js/vendor/codemirror4/mode/clike/clike.js', ready);
+        getScript(jsbin.static + '/js/vendor/codemirror5/mode/clike/clike.js', ready);
       },
       handler: function processing(source, resolve, reject) {
         try {
@@ -335,7 +356,7 @@ var processors = jsbin.processors = (function () {
       extensions: ['jade'],
       url: jsbin.static + '/js/vendor/jade.js?1.4.2',
       init: function jade(ready) {
-        $.getScript(jsbin.static + '/js/vendor/codemirror4/mode/jade/jade.js', ready);
+        getScript(jsbin.static + '/js/vendor/codemirror5/mode/jade/jade.js', ready);
       },
       handler: function jade(source, resolve, reject) {
         try {
@@ -364,10 +385,10 @@ var processors = jsbin.processors = (function () {
       id: 'less',
       target: 'css',
       extensions: ['less'],
-      url: jsbin.static + '/js/vendor/less-1.7.3.min.js',
+      url: jsbin.static + '/js/vendor/less.min.js',
       init: passthrough,
       handler: function less(source, resolve, reject) {
-        window.less.Parser().parse(source, function (error, result) {
+        window.less.render(source, function (error, result) {
           if (error) {
             // index starts at 1
             var line = parseInt(error.line, 10) || 0;
@@ -386,7 +407,7 @@ var processors = jsbin.processors = (function () {
 
             return reject([errors]);
           }
-          resolve(result.toCSS().trim());
+          resolve(result.css.trim());
         });
       }
     }),
@@ -398,9 +419,9 @@ var processors = jsbin.processors = (function () {
       // url: jsbin.static + '/js/vendor/sass/dist/sass.worker.js',
       init: passthrough,
         /* keeping old code for local version of scss if we ever want it again */
-        // $.getScript(jsbin.static + '/js/vendor/codemirror3/mode/sass/sass.js', function () {
+        // getScript(jsbin.static + '/js/vendor/codemirror3/mode/sass/sass.js', function () {
         // Sass.initialize(jsbin.static + '/js/vendor/sass/dist/worker.min.js');
-      handler: throttle(debounceAsync(function (source, resolve, reject, done) {
+      handler: throttle(debounceAsync(function sass(source, resolve, reject, done) {
         $.ajax({
           type: 'post',
           url: '/processor',
@@ -444,7 +465,7 @@ var processors = jsbin.processors = (function () {
       target: 'sass',
       extensions: ['sass'],
       init: function (ready) {
-        $.getScript(jsbin.static + '/js/vendor/codemirror4/mode/sass/sass.js', ready);
+        getScript(jsbin.static + '/js/vendor/codemirror5/mode/sass/sass.js', ready);
       },
       handler: throttle(debounceAsync(function (source, resolve, reject, done) {
         $.ajax({
@@ -475,6 +496,28 @@ var processors = jsbin.processors = (function () {
           complete: done
         });
       }), 500),
+    }),
+
+    babel: createProcessor({
+      id: 'babel',
+      target: 'js',
+      extensions: ['es6'],
+      url: jsbin.static + '/js/vendor/babel.min.js',
+      init: function (ready) {
+        ready();
+      },
+      handler: function babelhandle(source, resolve, reject) {
+        try {
+          resolve(babel.transform(source, { stage: 0 }).code);
+        } catch (e) {
+          console.error(e.message);
+          reject([{
+            line: e.loc.line - 1,
+            ch: e.loc.column,
+            msg: e.message.split('\n')[0].replace(new RegExp('\\\(' + e.loc.line + ':' + e.loc.column + '\\\)'), '(' + e.loc.column + ')')
+          }]);
+        }
+      }
     }),
 
     myth: createProcessor({
@@ -538,6 +581,90 @@ var processors = jsbin.processors = (function () {
         });
       }
     }),
+
+    clojurescript: (function() {
+
+      var worker, resolveWorker;
+
+      function workerMsgHandler() {
+        window.addEventListener('message', function(event) {
+          var message;
+          try {
+            message = JSON.parse(event.data);
+          } catch (e) {
+            return;
+          }
+
+          if (message.type === 'eval') {
+            jsbin_cljs.core.eval(
+              '(ns cljs.user)' + message.source,
+              function(err, result) {
+                cljs.user = null;
+                if (err) {
+                  throw Error(err);
+                } else {
+                  parent.postMessage(JSON.stringify({
+                    type: 'eval',
+                    result: result
+                  }), '*');
+                }
+              });
+          }
+        }, false);
+      }
+
+      window.addEventListener('message', function(event) {
+        try {
+          var message = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+
+          if (message.type === 'eval') {
+            resolveWorker('console.log('+JSON.stringify(message.result)+')');
+          }
+        } catch (e) {
+          // toss errors
+        }
+      }, false);
+
+      return createProcessor({
+        id: 'clojurescript',
+        target: 'js',
+        extensions: ['clj', 'cljs'],
+        url: jsbin.static + '/js/vendor/cljs.js',
+        init: function clojurescript(ready) {
+
+          /* Create sandbox */
+          worker = document.createElement('iframe');
+          worker.sandbox = 'allow-same-origin allow-scripts';
+          worker.name = '<cljs>';
+
+          worker.onload = function() {
+            /* Init CLJS context */
+            worker.contentWindow.jsbin_cljs = jsbin_cljs;
+            worker.contentWindow.cljs = cljs;
+            worker.contentWindow.goog = goog;
+
+            var initilizer = worker.contentWindow.document.createElement('script')
+            initilizer.textContent = '('+workerMsgHandler.toString().split('\n').join('')+')()';
+            worker.contentWindow.document.body.appendChild(initilizer);
+
+            getScript(jsbin.static + '/js/vendor/codemirror5/mode/clojure/clojure.js', ready);
+          };
+
+          document.body.appendChild(worker);
+        },
+        handler: function (source, resolve, reject) {
+          try {
+            resolveWorker = resolve;
+            worker.contentWindow.postMessage(JSON.stringify({
+              type: 'eval',
+              source: source
+            }), '*');
+          } catch (e) {
+            console.error(e);
+          }
+        }
+      })
+    })(),
 
     traceur: (function () {
       var SourceMapConsumer,
@@ -620,10 +747,11 @@ var processors = jsbin.processors = (function () {
 
       e.preventDefault();
       var target = this.hash.substring(1),
-          label = $(this).text();
+          label = $(this).text(),
+          labelData = $(this).data('label');
       if (target !== 'convert') {
-        $panelButton.html(label);
-        $label.text(label);
+        $panelButton.html(labelData || label);
+        $label.html('<span>' + label + '</span>');
         if (target === panelId) {
           jsbin.processors.reset(panelId);
           render();
@@ -641,8 +769,9 @@ var processors = jsbin.processors = (function () {
     }).bind('select', function (event, value) {
       if (value === this.hash.substring(1)) {
         var $panelButton = $panelButtons.find('a[href$="' + panelId + '"]');
-        $label.text($(this).text());
-        $panelButton.html($(this).text());
+        var $this = $(this);
+        $label.html('<span>' + $this.text() + '</span>');
+        $panelButton.html($this.data('label') || $this.text());
       }
     });
   });
@@ -687,7 +816,8 @@ var processors = jsbin.processors = (function () {
       panel.editor.setOption('smartIndent', smartIndent);
 
       panel.processor = defaultProcessor;
-      delete jsbin.state.processors[panelId];
+      // delete jsbin.state.processors[panelId];
+      jsbin.state.processors[panelId] = panelId;
       delete panel.type;
     }
 

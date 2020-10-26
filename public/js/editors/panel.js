@@ -1,7 +1,7 @@
 /*globals $, CodeMirror, jsbin, jshintEnabled, RSVP */
-
 var $document = $(document),
-    $source = $('#source');
+    $source = $('#source'),
+    userResizeable = !$('html').hasClass('layout');
 
 var editorModes = {
   html: 'htmlmixed',
@@ -16,7 +16,8 @@ var editorModes = {
   sass: 'text/x-sass',
   scss: 'text/x-scss',
   processing: 'text/x-csrc',
-  jade: 'text/x-jade'
+  jade: 'text/x-jade',
+  clojurescript: 'clojure'
 };
 
 var badChars = new RegExp('[\u200B\u0080-\u00a0]', 'g');
@@ -39,13 +40,16 @@ var simpleJsHint = function(cm) {
     return CodeMirror.simpleHint(cm, CodeMirror.hint.javascript);
   }
 };
+
 CodeMirror.commands.autocomplete = simpleJsHint;
 
 CodeMirror.commands.snippets = function (cm) {
   'use strict';
-  if (['htmlmixed', 'javascript', 'css', editorModes['less']].indexOf(cm.options.mode) === -1) {
+  if (['htmlmixed', 'javascript', 'css', editorModes['less'], editorModes['sass'], editorModes['scss']].indexOf(cm.options.mode) === -1) {
     return CodeMirror.simpleHint(cm, CodeMirror.hint.anyword);
-  } else {
+  } else if (oldCodeMirror) {
+    return oldCodeMirror.snippets(cm);
+  } else if (!jsbin.mobile) {
     return CodeMirror.snippets(cm);
   }
 };
@@ -72,9 +76,14 @@ var Panel = function (name, settings) {
   panel.el = document.getElementById(name);
   panel.order = ++Panel.order;
 
+  panel.label = (settings.label || name);
+
   panel.$el.data('panel', panel);
 
   this._eventHandlers = {};
+
+  panel.on('show', panels.updateQuery);
+  panel.on('hide', panels.updateQuery);
 
   // keyboard shortcut (set in keyboardcontrol.js)
   panelShortcuts[panelShortcuts.start + panel.order] = panel.id;
@@ -83,30 +92,16 @@ var Panel = function (name, settings) {
     settings.nosplitter = true;
   }
 
-  // this is nasty and wrong, but I'm going to put here anyway .i..
-  // removed as we have a different way to check for errors
-  // if (this.id === 'javascript') {
-  //   this.on('processor', function (e, preprocessor) {
-  //     if (preprocessor === 'none') {
-  //       jshintEnabled = true;
-  //       checkForErrors();
-  //     } else {
-  //       jshintEnabled = false;
-  //       $error.hide();
-  //     }
-  //   });
-  // }
-
   if (settings.editor) {
     cmSettings = {
       parserfile: [],
       readOnly: jsbin.state.embed ? 'nocursor' : false,
       dragDrop: false, // we handle it ourselves
       mode: editorModes[panelLanguage],
-      lineWrapping: true,
+      lineWrapping: false,
       // gutters: ['line-highlight'],
       theme: jsbin.settings.theme || 'jsbin',
-      highlighLine: true
+      highlightLine: true
     };
 
     $.extend(cmSettings, jsbin.settings.editor || {});
@@ -121,11 +116,14 @@ var Panel = function (name, settings) {
       cmSettings.extraKeys.Tab = 'snippets';
     }
 
-    // some emmet "stuff" - TODO decide whether this is needed still...
-    $.extend(cmSettings, {
-      syntax: name,   /* define Zen Coding syntax */
-      profile: name   /* define Zen Coding output profile */
-    });
+
+    if (name === 'html') {
+      // some emmet "stuff" - TODO decide whether this is needed still...
+      $.extend(cmSettings, {
+        syntax: name, // define Zen Coding syntax
+        profile: name, // define Zen Coding output profile
+      });
+    }
 
     // make sure tabSize and indentUnit are numbers
     if (typeof cmSettings.tabSize === 'string') {
@@ -136,6 +134,12 @@ var Panel = function (name, settings) {
     }
 
     panel.editor = CodeMirror.fromTextArea(panel.el, cmSettings);
+
+    if (name === 'html' || name === 'css') {
+      delete emmetCodeMirror.defaultKeymap['Cmd-D'];
+      delete emmetCodeMirror.defaultKeymap['Ctrl-D'];
+      emmetCodeMirror(panel.editor);
+    }
 
     panel.editor.on('highlightLines', function () {
       window.location.hash = panels.getHighlightLines();
@@ -168,7 +172,10 @@ var Panel = function (name, settings) {
     panel._setupEditor(panel.editor, name);
   }
 
-  if (!settings.nosplitter) {
+  if ($('html').is('.layout')) {
+    panel.splitter = $();
+    panel.$el.removeClass('stretch');
+  } else if (!settings.nosplitter) {
     panel.splitter = panel.$el.splitter(splitterSettings).data('splitter');
     panel.splitter.hide();
   } else {
@@ -182,12 +189,16 @@ var Panel = function (name, settings) {
   } else if (settings.processor) { // FIXME is this even used?
     panelLanguage = settings.processors[settings.processor];
     jsbin.processors.set(panel, settings.processor);
+  } else if (processors[panel.id]) {
+    jsbin.processors.set(panel, panel.id);
   } else {
+    // this is just a dummy function for console & output...which makes no sense...
     panel.processor = function (str) {
       return new RSVP.Promise(function (resolve) {
         resolve(str);
       });
     };
+
   }
 
   if (settings.beforeRender) {
@@ -204,8 +215,10 @@ var Panel = function (name, settings) {
   }
 
   if (showPanelButton) {
-    this.controlButton = $('<a class="button group" href="?' + name + '">' + (settings.label || name) + '</a>');
-    this.controlButton.click(function () {
+    this.controlButton = $('<a role="button" class="button group" href="?' + name + '">' + panel.label + '</a>');
+    this.updateAriaState();
+
+    this.controlButton.on('click touchstart', function () {
       panel.toggle();
       return false;
     });
@@ -215,9 +228,11 @@ var Panel = function (name, settings) {
   $panel.focus(function () {
     panel.focus();
   });
-  $panel.add(this.$el.find('.label')).click(function () {
-    panel.focus();
-  });
+  if (!jsbin.mobile) {
+    $panel.add(this.$el.find('.label')).click(function () {
+      panel.focus();
+    });
+  }
 };
 
 Panel.order = 0;
@@ -225,7 +240,11 @@ Panel.order = 0;
 Panel.prototype = {
   virgin: true,
   visible: false,
-  show: function (x) {
+  updateAriaState: function updateAriaState() {
+    this.controlButton.attr('aria-label', this.label + ' Panel: ' + (this.visible ? 'Active' : 'Inactive'));
+  },
+  show: function show(x) {
+    hideOpen();
     if (this.visible) {
       return;
     }
@@ -238,7 +257,10 @@ Panel.prototype = {
 
     analytics.showPanel(panel.id);
 
-    // panel.$el.show();
+    if (jsbin.mobile) {
+      panels.hideAll(true);
+    }
+
     if (panel.splitter.length) {
       if (panelCount === 0 || panelCount > 1) {
         var $panel = $('.panel.' + panel.id).show();
@@ -259,21 +281,39 @@ Panel.prototype = {
     }
     panel.controlButton.addClass('active');
     panel.visible = true;
+    this.updateAriaState();
+
+
+    // if the textarea is in focus AND we're mobile AND the keyboard is up
+    if (jsbin.mobile && window.matchMedia && window.matchMedia('(max-height: 410px) and (max-width: 640px)').matches) {
+      if (panel.editor) panel.editor.focus();
+    }
+
+    if (jsbin.mobile) {
+      panel.focus();
+      panel.trigger('show');
+      return;
+    }
 
     // update the splitter - but do it on the next tick
     // required to allow the splitter to see it's visible first
     setTimeout(function () {
-      if (x !== undefined) {
-        panel.splitter.trigger('init', x);
-      } else {
-        panel.distribute();
+      if (userResizeable) {
+        if (x !== undefined) {
+          panel.splitter.trigger('init', x);
+        } else {
+          panel.distribute();
+        }
       }
       if (panel.editor) {
         // populate the panel for the first time
         if (panel.virgin) {
           var top = panel.$el.find('.label').outerHeight();
           top += 8;
-          $(panel.editor.scroller).find('.CodeMirror-lines').css('padding-top', top);
+
+          if (!jsbin.mobile) {
+            $(panel.editor.scroller).find('.CodeMirror-lines').css('padding-top', top);
+          }
 
           populateEditor(panel, panel.name);
         }
@@ -297,15 +337,21 @@ Panel.prototype = {
       panel.trigger('show');
 
       panel.virgin = false;
-  }, 0);
+    }, 0);
 
     // TODO save which panels are visible in their profile - but check whether it's their code
   },
-  hide: function () {
+  hide: function (fromShow) {
     var panel = this;
     // panel.$el.hide();
     panel.visible = false;
-    analytics.hidePanel(panel.id);
+    this.updateAriaState();
+
+    if (!fromShow) {
+      analytics.hidePanel(panel.id);
+    } else if (panel.editor) {
+      getRenderedCode[panel.id] = getRenderedCode.render(panel.id);
+    }
 
     // update all splitter positions
     // LOGIC: when you go to hide, you need to check if there's
@@ -328,22 +374,18 @@ Panel.prototype = {
       panel.$el.hide();
       panel.splitter.hide();
     }
-    // } else {
-    //   panel.$el.hide();
-    // }
+
+
     if (panel.editor) {
       panel.controlButton.toggleClass('hasContent', !!this.getCode().trim().length);
     }
 
     panel.controlButton.removeClass('active');
-    panel.distribute();
 
     if (panel.settings.hide) {
       panel.settings.hide.call(panel, true);
     }
 
-    // this.controlButton.show();
-    // setTimeout(function () {
     var visible = jsbin.panels.getVisible();
     if (visible.length) {
       jsbin.panels.focused = visible[0];
@@ -355,8 +397,22 @@ Panel.prototype = {
       jsbin.panels.focused.focus();
     }
 
-    $document.trigger('sizeeditors');
+    if (!fromShow && jsbin.mobile && visible.length === 0) {
+      $document.trigger('history:load');
+      $('#history').show();
+      setTimeout(function () {
+        $body.removeClass('panelsVisible');
+      }, 100); // 100 is on purpose to add to the effect of the reveal
+    }
+
     panel.trigger('hide');
+
+    if (fromShow) {
+      return;
+    }
+
+    panel.distribute();
+    $document.trigger('sizeeditors');
 
     // note: the history:open does first check whether there's an open panels
     // and if there are, it won't show the history, it'll just ignore the event
@@ -408,7 +464,7 @@ Panel.prototype = {
     if (this.settings.init) this.settings.init.call(this);
   },
   _setupEditor: function () {
-    var focusedPanel = sessionStorage.getItem('panel') || jsbin.settings.focusedPanel,
+    var focusedPanel = store.sessionStorage.getItem('panel') || jsbin.settings.focusedPanel,
         panel = this,
         editor = panel.editor;
 
@@ -438,7 +494,7 @@ Panel.prototype = {
     // });
 
     // This prevents the browser from jumping
-    if (jsbin.mobile || jsbin.tablet || jsbin.embed) {
+    if (jsbin.embed) {
       editor._focus = editor.focus;
       editor.focus = function () {
         // console.log('ignoring manual call');
@@ -469,16 +525,20 @@ Panel.prototype = {
       if (panel.visible) {
         var height = panel.editor.scroller.closest('.panel').outerHeight();
         var offset = 0;
-        var lineHeight = panel.editor.defaultTextHeight();
         $error = panel.$el.find('details');
         offset += ($error.filter(':visible').height() || 0);
 
         if (!jsbin.lameEditor) {
-          // show 50% more lines as blank
-          panel.editor.scroller.find('.CodeMirror-lines').css({ paddingBottom: height / 4 * 3 });
           editor.scroller.height(height - offset);
         }
         try { editor.refresh(); } catch (e) {}
+
+        setTimeout(function () {
+          $source[0].style.paddingLeft = '1px';
+          setTimeout(function () {
+            $source[0].style.paddingLeft = '0';
+          }, 0);
+        }, 0);
       }
     });
 
@@ -512,7 +572,7 @@ Panel.prototype = {
               }
             }
 
-            editor.setCursor({ line: (sessionStorage.getItem('line') || blank || 0) * 1, ch: (sessionStorage.getItem('character') || 0) * 1 });
+            editor.setCursor({ line: (store.sessionStorage.getItem('line') || blank || 0) * 1, ch: (store.sessionStorage.getItem('character') || 0) * 1 });
           }
         }, 110); // This is totally arbitrary
       }
@@ -541,35 +601,40 @@ Panel.prototype = {
 function populateEditor(editor, panel) {
   if (!editor.codeSet) {
     // populate - should eventually use: session, saved data, local storage
-    var cached = sessionStorage.getItem('jsbin.content.' + panel), // session code
-        saved = jsbin.embed ? null : localStorage.getItem('saved-' + panel), // user template
-        sessionURL = sessionStorage.getItem('url'),
+    var cached = store.sessionStorage.getItem('jsbin.content.' + panel), // session code
+        saved = jsbin.embed ? null : store.localStorage.getItem('saved-' + panel), // user template
+        sessionURL = store.sessionStorage.getItem('url'),
         changed = false;
 
     // if we clone the bin, there will be a checksum on the state object
     // which means we happily have write access to the bin
     if (sessionURL !== jsbin.getURL() && !jsbin.state.checksum) {
       // nuke the live saving checksum
-      sessionStorage.removeItem('checksum');
+      store.sessionStorage.removeItem('checksum');
       saveChecksum = false;
     }
 
     if (template && cached == template[panel]) { // restored from original saved
       editor.setCode(cached);
-    } else if (cached && sessionURL == jsbin.getURL()) { // try to restore the session first - only if it matches this url
+    } else if (cached && sessionURL == jsbin.getURL() && sessionURL !== jsbin.root) { // try to restore the session first - only if it matches this url
       editor.setCode(cached);
       // tell the document that it's currently being edited, but check that it doesn't match the saved template
       // because sessionStorage gets set on a reload
       changed = cached != saved && cached != template[panel];
     } else if (!template.post && saved !== null && !/(edit|embed)$/.test(window.location) && !window.location.search) { // then their saved preference
       editor.setCode(saved);
-      var processor = JSON.parse(localStorage.getItem('saved-processors') || '{}')[panel];
+      var processor = JSON.parse(store.localStorage.getItem('saved-processors') || '{}')[panel];
       if (processor) {
         jsbin.processors.set(jsbin.panels.panels[panel], processor);
       }
     } else { // otherwise fall back on the JS Bin default
       editor.setCode(template[panel]);
     }
+
+    if (editor.editor && editor.editor.clearHistory) {
+      editor.editor.clearHistory();
+    }
+
   } else {
     // this means it was set via the url
     changed = true;

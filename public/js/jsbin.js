@@ -12,12 +12,11 @@ try {
 }
 
 // required because jQuery 1.4.4 lost ability to search my object property :( (i.e. a[host=foo.com])
-jQuery.expr[':'].host = function(obj, index, meta, stack) {
-  return obj.host == meta[3];
+jQuery.expr[':'].host = function(obj, index, meta) {
+  return obj.host === meta[3];
 };
 
 function throttle(fn, delay) {
-  var timer = null;
   var throttled = function () {
     var context = this, args = arguments;
     throttled.cancel();
@@ -73,7 +72,7 @@ function escapeHTML(html){
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
-};
+}
 
 function dedupe(array) {
   var hash    = {},
@@ -93,12 +92,59 @@ function dedupe(array) {
   return results;
 }
 
+function isDOM(obj) {
+  'use strict';
+  var Node = window.Node || false;
+  if (Node) {
+    return obj instanceof Node;
+  }
+  return obj.nodeType === 1;
+}
+
 function exposeSettings() {
   'use strict';
-  if (window.jsbin instanceof Node || !window.jsbin) { // because...STUPIDITY!!!
+
+  function mockEditor (editor, methods) {
+    return methods.reduce(function (mockEditor, method) {
+      mockEditor[method] = editor[method].bind(editor);
+      return mockEditor;
+    }, {});
+  }
+
+  function mockPanels() {
+    var results = {};
+    var panels = jsbin.panels.panels;
+    ['css', 'javascript', 'html'].forEach(function (type) {
+      results[type] = {
+        setCode: panels[type].setCode.bind(panels[type]),
+        getCode: panels[type].getCode.bind(panels[type]),
+        editor: mockEditor(panels[type].editor, [
+          'setCursor',
+          'getCursor',
+          'addKeyMap',
+          'on'
+        ])
+      };
+    });
+
+    return results;
+  }
+
+  if (isDOM(window.jsbin) || !window.jsbin || !window.jsbin.state) { // because...STUPIDITY!!!
     window.jsbin = {
+      user: $.extend(true, {}, window.jsbin.user, jsbin.user),
       'static': jsbin['static'],
-      version: jsbin.version
+      version: jsbin.version,
+      analytics: jsbin.analytics,
+      state: {
+        title: jsbin.state.title,
+        description: jsbin.state.description
+      },
+      embed: jsbin.embed,
+      panels: {
+        // FIXME decide whether this should be locked down further
+        panels: mockPanels()
+      }
     }; // create the holding object
 
     if (jsbin.state.metadata && jsbin.user && jsbin.state.metadata.name === jsbin.user.name && jsbin.user.name) {
@@ -110,30 +156,39 @@ function exposeSettings() {
     Object.defineProperty(window, key, {
       get:function () {
         window.jsbin.settings = jsbin.settings;
-        console.log('jsbin.settings can how be modified on the console');
+        console.log('jsbin.settings can now be modified on the console');
       }
     });
     if (!jsbin.embed) {
       console.log('To edit settings, type this string into the console: ' + key);
+      console.log("Want to try out the alpha version 5 of jsbin? On https://jsbin.com, run the following code in your console:\n\ndocument.cookie = 'version=v5; domain=.jsbin.com'");
     }
   }
 }
 
-var storedSettings = localStorage.getItem('settings');
-if (storedSettings === "undefined") {
-  // yes, equals the *string* "undefined", then something went wrong
+var storedSettings = store.localStorage.getItem('settings');
+if (storedSettings === 'undefined' || jsbin.embed) {
+  // yes, equals the *string* 'undefined', then something went wrong
   storedSettings = null;
 }
 
-// In all cases localStorage takes precedence over user settings so users can
-// configure it from the console and overwrite the server delivered settings
-jsbin.settings = $.extend({}, jsbin.settings, JSON.parse(storedSettings || '{}'));
+// try to copy across statics
+['root', 'shareRoot', 'runner', 'static', 'version'].map(function (key) {
+  if (!jsbin[key]) {
+    jsbin[key] = window.jsbin[key];
+  }
+});
 
-if (jsbin.user) {
-  jsbin.settings = $.extend({}, jsbin.user.settings, jsbin.settings);
+if (jsbin.user && jsbin.user.name) {
+  jsbin.settings = $.extend(true, {}, jsbin.user.settings, jsbin.settings);
+  if (jsbin.user.settings.font) {
+    jsbin.settings.font = parseInt(jsbin.user.settings.font, 10);
+  }
+} else {
+  // In all cases localStorage takes precedence over user settings so users can
+  // configure it from the console and overwrite the server delivered settings
+  jsbin.settings = $.extend({}, jsbin.settings, JSON.parse(storedSettings || '{}'));
 }
-
-exposeSettings();
 
 // if the above code isn't dodgy, this for hellz bells is:
 jsbin.mobile = /WebKit.*Mobile.*|Android/.test(navigator.userAgent);
@@ -148,13 +203,13 @@ jsbin.ie = (function(){
   while (
     div.innerHTML = '<!--[if gt IE ' + (++v) + ']><i></i><![endif]-->',
     all[0]
-  );
+  ) {}
   return v > 4 ? v : undef;
 }());
 
 if (!storedSettings && (location.origin + location.pathname) === jsbin.root + '/') {
   // first timer - let's welcome them shall we, Dave?
-  localStorage.setItem('settings', '{}');
+  store.localStorage.setItem('settings', '{}');
 }
 
 if (!jsbin.settings.editor) {
@@ -176,7 +231,7 @@ jQuery.ajaxPrefilter(function (options, original, xhr) {
   var skip = {head: 1, get: 1};
   if (!skip[options.type.toLowerCase()] &&
       !options.url.match(/^https:\/\/api.github.com/)) {
-    xhr.setRequestHeader('X-CSRF-Token', jsbin.state.token);
+    xhr.setRequestHeader('x-csrf-token', jsbin.state.token);
   }
 });
 
@@ -184,19 +239,41 @@ jsbin.owner = function () {
   return jsbin.user && jsbin.user.name && jsbin.state.metadata && jsbin.state.metadata.name === jsbin.user.name;
 };
 
-jsbin.getURL = function (withoutRoot, share) {
-  var url = withoutRoot ? '' : (share ? jsbin.shareRoot : jsbin.root),
-      state = jsbin.state;
+jsbin.getURL = function (options) {
+  if (!options) { options = {}; }
+
+  var withoutRoot = options.withoutRoot;
+  var root = options.root || jsbin.root;
+  var url = withoutRoot ? '' : root;
+  var state = jsbin.state;
 
   if (state.code) {
     url += '/' + state.code;
 
-    if (state.revision) { //} && state.revision !== 1) {
-      url += '/' + state.revision;
+    if (!state.latest || options.withRevision) { //} && state.revision !== 1) {
+      if (options.withRevision !== false) {
+        url += '/' + (state.revision || 1);
+      }
     }
   }
   return url;
 };
+
+jsbin.state.updateSettings = throttle(function updateBinSettingsInner(update, method) {
+  if (!method) {
+    method = 'POST';
+  }
+
+  if (jsbin.state.code) {
+    update.checksum = jsbin.state.checksum;
+    $.ajax({
+      type: method, // consistency ftw :-\
+      url: jsbin.getURL({ withRevision: true }) + '/settings',
+      data: update
+    });
+  }
+}, 500);
+
 
 function objectValue(path, context) {
   var props = path.split('.'),
@@ -231,28 +308,22 @@ var $window = $(window),
     documentTitle = 'JS Bin',
     $bin = $('#bin'),
     loadGist,
-    // splitterSettings = JSON.parse(localStorage.getItem('splitterSettings') || '[ { "x" : null }, { "x" : null } ]'),
+    // splitterSettings = JSON.parse(store.localStorage.getItem('splitterSettings') || '[ { "x" : null }, { "x" : null } ]'),
     unload = function () {
-      // sessionStorage.setItem('javascript', editors.javascript.getCode());
-      if (jsbin.panels.focused.editor) {
-        try { // this causes errors in IE9 - so we'll use a try/catch to get through it
-          sessionStorage.setItem('line', jsbin.panels.focused.editor.getCursor().line);
-          sessionStorage.setItem('character', jsbin.panels.focused.editor.getCursor().ch);
-        } catch (e) {
-          sessionStorage.setItem('line', 0);
-          sessionStorage.setItem('character', 0);
-        }
+      store.sessionStorage.setItem('url', jsbin.getURL());
+      store.localStorage.setItem('settings', JSON.stringify(jsbin.settings));
+
+      if (jsbin.panels.saveOnExit === false) {
+        return;
       }
 
-      sessionStorage.setItem('url', jsbin.getURL());
-      localStorage.setItem('settings', JSON.stringify(jsbin.settings));
-
-      // if (jsbin.panels.saveOnExit) ;
       jsbin.panels.save();
       jsbin.panels.savecontent();
 
       var panel = jsbin.panels.focused;
-      if (panel) sessionStorage.setItem('panel', panel.id);
+      if (panel) {
+        store.sessionStorage.setItem('panel', panel.id);
+      }
     };
 
 $window.unload(unload);
@@ -260,8 +331,8 @@ $window.unload(unload);
 // window.addEventListener('storage', function (e) {
 //   if (e.storageArea === localStorage && e.key === 'settings') {
 //     console.log('updating from storage');
-//     console.log(JSON.parse(localStorage.settings));
-//     jsbin.settings = JSON.parse(localStorage.settings);
+//     console.log(JSON.parse(store.localStorage.settings));
+//     jsbin.settings = JSON.parse(store.localStorage.settings);
 //   }
 // });
 
@@ -270,46 +341,87 @@ if ($.browser.opera) {
   setInterval(unload, 500);
 }
 
-if (location.search.indexOf('api=') !== -1) {
-  (function () {
-    var urlParts = location.search.substring(1).split(','),
-        newUrlParts = [],
-        i = urlParts.length,
-        apiurl = '';
-
-    while (i--) {
-      if (urlParts[i].indexOf('api=') !== -1) {
-        apiurl = urlParts[i].replace(/&?api=/, '');
-      } else {
-        newUrlParts.push(urlParts[i]);
-      }
-    }
-
-    $.getScript(jsbin.root + '/js/chrome/sandbox.js', function () {
-      var sandbox = new Sandbox(apiurl);
-      sandbox.get('settings', function (data) {
-        $.extend(jsbin.settings, data);
-        unload();
-        window.location = location.pathname + (newUrlParts.length ? '?' + newUrlParts.join(',') : '');
-      });
-    });
-
-  }());
-}
-
-
 $document.one('jsbinReady', function () {
+  exposeSettings();
   $bin.removeAttr('style');
   $body.addClass('ready');
 });
 
-if (navigator.userAgent.indexOf(' Mac ') !== -1) (function () {
+if (navigator.userAgent.indexOf(' Mac ') !== -1) {
+  (function () {
   var el = $('#keyboardHelp')[0];
   el.innerHTML = el.innerHTML.replace(/ctrl/g, 'cmd').replace(/Ctrl/g, 'ctrl');
 })();
+}
 
 if (jsbin.embed) {
   $window.on('focus', function () {
     return false;
   });
 }
+
+window.addEventListener('message', function (event) {
+  var data;
+  try {
+    data = JSON.parse(event.data);
+  } catch (e) {
+    return;
+  }
+
+  if (data.type === 'cached') {
+    if (data.updated > jsbin.state.metadata.last_updated || !jsbin.state.metadata.last_updated) {
+      console.log('restored from cache: %sms newer', (new Date(data.updated).getTime() - new Date(jsbin.state.metadata.last_updated).getTime()) / 100);
+      // update the bin
+      jsbin.panels.panels.html.setCode(data.template.html);
+      jsbin.panels.panels.javascript.setCode(data.template.javascript);
+      jsbin.panels.panels.css.setCode(data.template.css);
+      $('a.save:first').click();
+    }
+  }
+});
+
+(function() {
+  if (!jsbin.settings.debug) {
+    return;
+  }
+
+  var active = document.createElement('pre');
+  document.body.appendChild(active);
+  active.tabindex = -1;
+  with (active.style) { // warning: `with` I know what I'm doing!
+    position = 'fixed';
+    padding = '2px';
+    bottom = right = '20px';
+    margin = 0;
+    fontSize = 12;
+    color = '#fff';
+    background = '#aaa';
+    whiteSpace = 'pre-wrap';
+    maxWidth = '95%';
+    zIndex = 10000000;
+    pointerEvents = 'none';
+  }
+
+  var lastActive = null;
+  var showActive = function () {
+    var el = document.activeElement;
+    var html = '';
+    var attrs = el.attributes;
+    var i = 0;
+
+    if (el !== lastActive && el !== active) {
+      for (; i < attrs.length; i++) {
+        html += ' ' + attrs[i].name + '="' + attrs[i].value + '"';
+      }
+
+      active.textContent = '<' + el.nodeName.toLowerCase() + html + '>';
+      lastActive = el;
+    }
+
+    requestAnimationFrame(showActive);
+  };
+
+  showActive();
+
+
+})();

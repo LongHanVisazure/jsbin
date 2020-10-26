@@ -2,8 +2,9 @@
 <html class="{{#if flash_tip}}showtip{{/if}}">
   <head>
     <meta charset="utf-8">
-    <title>Account Management</title>
+    <title>{{#if title}}{{title}} - {{/if}}Account Management</title>
     <meta name="viewport" content="width=device-width">
+    <meta name="description" content="{{description}}">
     <link rel="icon" href="{{static}}/images/favicon.png">
     <link href="//fonts.googleapis.com/css?family=Open+Sans:700,400" rel="stylesheet" type="text/css">
     <link rel="stylesheet" href="{{static}}/css/help.css{{cacheBust}}">
@@ -11,8 +12,8 @@
       var jsbin = { "static": "{{static}}", version: "{{version}}" };
     </script>
     <script src="{{static}}/js/vendor/html5shiv.min.js{{cacheBust}}"></script>
-    {{#if isProduction}}
-      {{{analytics}}}
+    {{#if is_production}}
+      {{> analytics}}
     {{/if}}
   </head>
   <body>
@@ -50,7 +51,7 @@
         </li>
         <li><a href="http://jsbin.com/videos">YouTube</a>
         </li>
-        <li><a href="http://www.gittip.com/js_bin">Donate</a>
+        <li><a href="https://gratipay.com/jsbin/">Donate</a>
         </li>
       </ul>
       <ul class="legal">
